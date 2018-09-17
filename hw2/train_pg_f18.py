@@ -5,6 +5,8 @@ Adapted for CS294-112 Fall 2018 by Michael Chang and Soroush Nasiriany
 """
 import numpy as np
 import tensorflow as tf
+import tensorflow_probability as tfp
+
 import gym
 import logz
 import os
@@ -38,7 +40,14 @@ def build_mlp(input_placeholder, output_size, scope, n_layers, size, activation=
         Hint: use tf.layers.dense    
     """
     # YOUR CODE HERE
-    raise NotImplementedError
+    with tf.variable_scope(scope):
+        prev = input_placeholder
+        for i in range(n_layers):
+            dense = tf.layers.dense(inputs=prev, units=size, activation=activation, name="hidden%d" % i)
+            prev = dense
+
+        output_placeholder = tf.layers.dense(inputs=prev, units=output_size, activation=output_activation, name="output")
+
     return output_placeholder
 
 def pathlength(path):
@@ -102,7 +111,7 @@ class Agent(object):
         else:
             sy_ac_na = tf.placeholder(shape=[None, self.ac_dim], name="ac", dtype=tf.float32) 
         # YOUR CODE HERE
-        sy_adv_n = None
+        sy_adv_n = tf.placeholder(shape=[None], name="adv", dtype=tf.float32)
         return sy_ob_no, sy_ac_na, sy_adv_n
 
 
@@ -135,14 +144,15 @@ class Agent(object):
                 pass in self.size for the 'size' argument.
         """
         raise NotImplementedError
+        # build_mlp(input_placeholder, output_size, scope, n_layers, size, activation=tf.tanh, output_activation=None)
         if self.discrete:
             # YOUR_CODE_HERE
-            sy_logits_na = None
+            sy_logits_na = build_mlp(sy_ob_no, self.ac_dim, scope, self.n_layers, self.size)
             return sy_logits_na
         else:
             # YOUR_CODE_HERE
-            sy_mean = None
-            sy_logstd = None
+            sy_mean = build_mlp(sy_ob_no, self.ac_dim, scope, self.n_layers, self.size)
+            sy_logstd = tf.get_variable(name='log_std', shape=[self.ac_dim, None], initializer=tf.constant_initializer(0.))
             return (sy_mean, sy_logstd)
 
     #========================================================================================#
@@ -176,11 +186,16 @@ class Agent(object):
         if self.discrete:
             sy_logits_na = policy_parameters
             # YOUR_CODE_HERE
-            sy_sampled_ac = None
+            sy_sampled_ac = tf.multinomial(
+                                sy_logits_na,
+                                1,
+                                seed=None,
+                                name="discrete_sample"
+                            )
         else:
             sy_mean, sy_logstd = policy_parameters
             # YOUR_CODE_HERE
-            sy_sampled_ac = None
+            sy_sampled_ac = sy_mean + sy_logstd * tf.random_normal(sy_mean.shape, name="continuous_sample")
         return sy_sampled_ac
 
     #========================================================================================#
@@ -208,14 +223,21 @@ class Agent(object):
                 For the continuous case, use the log probability under a multivariate gaussian.
         """
         raise NotImplementedError
+        tfd = tfp.distributions
         if self.discrete:
             sy_logits_na = policy_parameters
             # YOUR_CODE_HERE
-            sy_logprob_n = None
+            dist = tfd.Categorical(logits=sy_logits_na)
+            sy_logprob_n = dist.log_prob(sy_ac_na, name='log_prob_discrete')
         else:
             sy_mean, sy_logstd = policy_parameters
             # YOUR_CODE_HERE
-            sy_logprob_n = None
+            # TODO: FIX
+            dist = tfd.MultivariateNormalDiag(
+                loc=sy_mean,
+                scale_diag=sy_logstd
+                )
+            sy_logprob_n = dist.log_prob(sy_ac_na, name='log_prob_continuous')
         return sy_logprob_n
 
     def build_computation_graph(self):
@@ -256,7 +278,7 @@ class Agent(object):
         #                           ----------PROBLEM 2----------
         # Loss Function and Training Operation
         #========================================================================================#
-        loss = None # YOUR CODE HERE
+        loss = self.sy_logprob_n * self.sy_adv_n  # YOUR CODE HERE
         self.update_op = tf.train.AdamOptimizer(self.learning_rate).minimize(loss)
 
         #========================================================================================#
