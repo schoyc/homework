@@ -104,7 +104,6 @@ class Agent(object):
                 sy_ac_na: placeholder for actions
                 sy_adv_n: placeholder for advantages
         """
-        raise NotImplementedError
         sy_ob_no = tf.placeholder(shape=[None, self.ob_dim], name="ob", dtype=tf.float32)
         if self.discrete:
             sy_ac_na = tf.placeholder(shape=[None], name="ac", dtype=tf.int32) 
@@ -143,16 +142,15 @@ class Agent(object):
                 Pass in self.n_layers for the 'n_layers' argument, and
                 pass in self.size for the 'size' argument.
         """
-        raise NotImplementedError
         # build_mlp(input_placeholder, output_size, scope, n_layers, size, activation=tf.tanh, output_activation=None)
         if self.discrete:
             # YOUR_CODE_HERE
-            sy_logits_na = build_mlp(sy_ob_no, self.ac_dim, scope, self.n_layers, self.size)
+            sy_logits_na = build_mlp(sy_ob_no, self.ac_dim, 'discrete_policy', self.n_layers, self.size)
             return sy_logits_na
         else:
             # YOUR_CODE_HERE
-            sy_mean = build_mlp(sy_ob_no, self.ac_dim, scope, self.n_layers, self.size)
-            sy_logstd = tf.get_variable(name='log_std', shape=[self.ac_dim, None], initializer=tf.constant_initializer(0.))
+            sy_mean = build_mlp(sy_ob_no, self.ac_dim, 'continuous_policy', self.n_layers, self.size)
+            sy_logstd = tf.get_variable(name='log_std', shape=[self.ac_dim], initializer=tf.constant_initializer(0.))
             return (sy_mean, sy_logstd)
 
     #========================================================================================#
@@ -182,7 +180,6 @@ class Agent(object):
         
                  This reduces the problem to just sampling z. (Hint: use tf.random_normal!)
         """
-        raise NotImplementedError
         if self.discrete:
             sy_logits_na = policy_parameters
             # YOUR_CODE_HERE
@@ -222,7 +219,6 @@ class Agent(object):
                 For the discrete case, use the log probability under a categorical distribution.
                 For the continuous case, use the log probability under a multivariate gaussian.
         """
-        raise NotImplementedError
         tfd = tfp.distributions
         if self.discrete:
             sy_logits_na = policy_parameters
@@ -232,7 +228,6 @@ class Agent(object):
         else:
             sy_mean, sy_logstd = policy_parameters
             # YOUR_CODE_HERE
-            # TODO: FIX
             dist = tfd.MultivariateNormalDiag(
                 loc=sy_mean,
                 scale_diag=sy_logstd
@@ -278,7 +273,7 @@ class Agent(object):
         #                           ----------PROBLEM 2----------
         # Loss Function and Training Operation
         #========================================================================================#
-        loss = self.sy_logprob_n * self.sy_adv_n  # YOUR CODE HERE
+        loss = tf.reduce_mean(tf.multiply(self.sy_logprob_n, self.sy_adv_n))  # YOUR CODE HERE
         self.update_op = tf.train.AdamOptimizer(self.learning_rate).minimize(loss)
 
         #========================================================================================#
@@ -327,7 +322,7 @@ class Agent(object):
             #                           ----------PROBLEM 3----------
             #====================================================================================#
             raise NotImplementedError
-            ac = None # YOUR CODE HERE
+            ac = self.sess.run(self.sy_sampled_ac) # YOUR CODE HERE
             ac = ac[0]
             acs.append(ac)
             ob, rew, done, _ = env.step(ac)
@@ -411,9 +406,27 @@ class Agent(object):
         """
         # YOUR_CODE_HERE
         if self.reward_to_go:
-            raise NotImplementedError
+            q_n = []
+            for rewards in re_n:
+                T = rewards.shape[0]
+                discounts = np.geomspace(self.gamma, self.gamma ** T, num=T)
+                Q = np.dot(discounts, rewards)
+                q_i = np.ones(T) * Q
+                q_n.append(q_i)
+
+            q_n = np.concatenate(q_n)
         else:
-            raise NotImplementedError
+            # Creates upper triangluar matrix:
+            # [0.1, 0.01, 0.001]
+            # [0,   0.1    0.01]
+            # [0,   0,      0.1]
+            q_n = []
+            for rewards in re_n:
+                T = rewards.shape[0]
+                discounts = np.triu(np.array([np.roll(np.geomspace(self.gamma, self.gamma ** T, num=T), i) for i in range(T)]))
+                q_i = np.dot(discounts, rewards)
+                q_n.append(q_i)
+            
         return q_n
 
     def compute_advantage(self, ob_no, q_n):
@@ -481,7 +494,7 @@ class Agent(object):
             # On the next line, implement a trick which is known empirically to reduce variance
             # in policy gradient methods: normalize adv_n to have mean zero and std=1.
             raise NotImplementedError
-            adv_n = None # YOUR_CODE_HERE
+            adv_n = (adv_n - np.mean(adv_n)) / np.std(adv_n) # YOUR_CODE_HERE
         return q_n, adv_n
 
     def update_parameters(self, ob_no, ac_na, q_n, adv_n):
@@ -532,7 +545,9 @@ class Agent(object):
         # and after an update, and then log them below. 
 
         # YOUR_CODE_HERE
-        raise NotImplementedError
+        # raise NotImplementedError
+        sess.run(self.update_op, feed_dict={self.sy_ob_no: ob_no, self.sy_ac_na: ac_na, self.sy_adv_n: adv_n})
+
 
 
 def train_PG(
