@@ -159,6 +159,38 @@ class QLearner(object):
     ######
 
     # YOUR CODE HERE
+    self.q_func = q_func(obs_t_float, self.num_actions, scope="q_func", reuse=False)
+    
+    self.target_q_func = tf.stop_gradient(q_func(obs_tp1_float, self.num_actions, scope="target_q_func", reuse=False))
+    self.q_func_tp1 = q_func(obs_tp1_float, self.num_actions, scope="q_func", reuse=True)
+
+    act_t = tf.argmax(self.q_func_tp1, 1) if double_q else tf.argmax(self.target_q_func, 1)
+    print("Act_t", act_t.shape)
+    print("act_t_ph", self.act_t_ph.shape)
+
+    q_tp1 = tf.reduce_sum(tf.multiply(self.target_q_func, tf.one_hot(act_t, self.num_actions)), 1)
+    print("q_tp1", q_tp1.shape)
+
+    
+    y_i = tf.where(tf.cast(self.done_mask_ph, tf.bool),
+                    self.rew_t_ph,
+                    self.rew_t_ph + gamma * q_tp1
+                    )
+
+    print("y_i", y_i.shape)
+    # y_i = tf.cond(tf.equal(self.done_mask_ph, tf.constant(1, tf.float32, tf.shape(self.done_mask_ph))), 
+    #               lambda: self.rew_t_ph,
+    #               lambda: self.rew_t_ph + gamma * tf.reduce_max(self.target_q_func) # y_i = r(s, a) + gamma * max_a' (Q(s', a'))
+    # )
+
+    q_i = tf.reduce_sum(tf.multiply(self.q_func, tf.one_hot(self.act_t_ph, self.num_actions)), 1) # Get Q(s, a) --> the a-th action of Q(s)
+    print("q_i", q_i.shape)
+    # alt: tf.one hot, tf multiply
+
+    # Question: # Do I need to reduce_sum q_i - y_i first?
+    self.total_error = tf.reduce_mean(huber_loss(q_i - y_i))
+    q_func_vars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='q_func')
+    target_q_func_vars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='target_q_func')
 
     ######
 
@@ -229,6 +261,53 @@ class QLearner(object):
     #####
 
     # YOUR CODE HERE
+    # self.last_obs = env.reset()
+    # while True:
+    # Is this correct? Why need feed dict?
+
+    self.replay_buffer_idx = self.replay_buffer.store_frame(self.last_obs)
+
+    if self.model_initialized:
+      eps = self.exploration.value(self.t)
+      A = self.num_actions
+
+      eps_ = eps * A / (A - 1)
+
+      # print("q-vals", self.q_func.shape)
+      obs_t = np.expand_dims(self.replay_buffer.encode_recent_observation(), 0)
+      # print("obs_t", obs_t.shape)
+
+      best_action = tf.argmax(self.q_func, 1)
+
+      # Credit for tensorflow ops to: https://web.stanford.edu/class/cs20si/2017/lectures/slides_14.pdf
+      random_action = tf.random_uniform((), 0, self.num_actions, tf.int64)
+      should_explore = tf.random_uniform((), 0, 1) < eps_
+      sampled_action = tf.cond(should_explore, lambda: random_action, lambda: best_action)
+
+      action, a_t, q_s = self.session.run([sampled_action, best_action, self.q_func], 
+                              feed_dict={self.obs_t_ph: obs_t})
+
+      # print("a_t eval", a_t)
+      # print("action", action)
+      # print("q_s eval", q_s)
+      # Epsilon Greedy Exploration
+
+      # eps_greedy_dist = np.ones(self.num_actions) * (eps / (A - 1))
+      # eps_greedy_dist[a_t] = 1 - eps
+
+      # Sample from this distribution to get action
+      # action = np.random.multinomial(1, eps_greedy_dist).argmax()
+
+    else:
+      action = np.random.randint(0, self.num_actions)
+
+    obs, reward, done, info = self.env.step(action)
+    self.replay_buffer.store_effect(self.replay_buffer_idx, action, reward, done)
+    self.last_obs = obs
+
+    if done:
+      self.last_obs = self.env.reset()
+
 
   def update_model(self):
     ### 3. Perform experience replay and train the network.
@@ -274,6 +353,45 @@ class QLearner(object):
       #####
 
       # YOUR CODE HERE
+      # Sample transitions
+      sample = self.replay_buffer.sample(self.batch_size)
+      obs_t_batch, act_t_batch, rew_t_batch, obs_tp1_batch, done_mask_batch = sample
+
+      # Initialize model
+      if not self.model_initialized:
+        initialize_interdependent_variables(self.session, tf.global_variables(), {
+            self.obs_t_ph: obs_t_batch,
+            self.act_t_ph: act_t_batch,
+            self.rew_t_ph: rew_t_batch,
+            self.obs_tp1_ph: obs_tp1_batch,
+            self.done_mask_ph: done_mask_batch,
+            self.learning_rate: self.optimizer_spec.lr_schedule.value(self.t)
+         })
+        print("Model Initalized")
+        self.model_initialized = True
+
+      # Update online network
+      # print("Running training function, t=%d" % self.t)
+      self.session.run(self.train_fn, feed_dict={
+        self.obs_t_ph: obs_t_batch,
+        self.act_t_ph: act_t_batch,
+        self.rew_t_ph: rew_t_batch,
+        self.obs_tp1_ph: obs_tp1_batch,
+        self.done_mask_ph: done_mask_batch,
+        self.learning_rate: self.optimizer_spec.lr_schedule.value(self.t)
+        })
+
+      # Update target network
+      # print("Updating target network, t=%d" % self.t)
+      if self.num_param_updates % self.target_update_freq == 0:
+        print("Updating target network, t=%d" % self.t)
+        self.session.run(self.update_target_fn, feed_dict={
+          # self.obs_t_ph: obs_t_batch,
+          # self.act_t_ph: act_t_batch,
+          # self.rew_t_ph: rew_t_batch,
+          # self.obs_tp1_ph: obs_tp1_batch,
+          # self.learning_rate: self.optimizer_spec.lr_schedule.value(self.t)
+          })
 
       self.num_param_updates += 1
 
@@ -308,10 +426,15 @@ class QLearner(object):
 def learn(*args, **kwargs):
   alg = QLearner(*args, **kwargs)
   while not alg.stopping_criterion_met():
+    if alg.t % 1000 == 0:
+      print("Timestep %d, Learning starts %d, Learning Freq %d" % (alg.t, alg.learning_starts, alg.learning_freq))
+    # print("Stepping environment")
     alg.step_env()
     # at this point, the environment should have been advanced one step (and
     # reset if done was true), and self.last_obs should point to the new latest
     # observation
+    # print("Updating model")
     alg.update_model()
+    # print("Logging progress")
     alg.log_progress()
 
