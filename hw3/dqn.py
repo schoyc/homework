@@ -160,7 +160,7 @@ class QLearner(object):
 
     # YOUR CODE HERE
     self.q_func = q_func(obs_t_float, self.num_actions, scope="q_func", reuse=False)
-    
+
     self.target_q_func = tf.stop_gradient(q_func(obs_tp1_float, self.num_actions, scope="target_q_func", reuse=False))
     self.q_func_tp1 = q_func(obs_tp1_float, self.num_actions, scope="q_func", reuse=True)
 
@@ -172,10 +172,12 @@ class QLearner(object):
     print("q_tp1", q_tp1.shape)
 
     
-    y_i = tf.where(tf.cast(self.done_mask_ph, tf.bool),
-                    self.rew_t_ph,
-                    self.rew_t_ph + gamma * q_tp1
-                    )
+    # y_i = tf.where(tf.cast(self.done_mask_ph, tf.bool),
+    #                 self.rew_t_ph,
+    #                 self.rew_t_ph + gamma * q_tp1
+    #                 )
+
+    y_i = self.rew_t_ph + gamma * (1.0 - self.done_mask_ph) * q_tp1
 
     print("y_i", y_i.shape)
     # y_i = tf.cond(tf.equal(self.done_mask_ph, tf.constant(1, tf.float32, tf.shape(self.done_mask_ph))), 
@@ -267,39 +269,55 @@ class QLearner(object):
 
     self.replay_buffer_idx = self.replay_buffer.store_frame(self.last_obs)
 
-    if self.model_initialized:
-      eps = self.exploration.value(self.t)
-      A = self.num_actions
+    eps = self.exploration.value(self.t)
+    A = self.num_actions
 
-      eps_ = eps * A / (A - 1)
+    eps_ = eps * A / (A - 1)
 
-      # print("q-vals", self.q_func.shape)
-      obs_t = np.expand_dims(self.replay_buffer.encode_recent_observation(), 0)
-      # print("obs_t", obs_t.shape)
-
-      best_action = tf.argmax(self.q_func, 1)
-
-      # Credit for tensorflow ops to: https://web.stanford.edu/class/cs20si/2017/lectures/slides_14.pdf
-      random_action = tf.random_uniform((), 0, self.num_actions, tf.int64)
-      should_explore = tf.random_uniform((), 0, 1) < eps_
-      sampled_action = tf.cond(should_explore, lambda: random_action, lambda: best_action)
-
-      action, a_t, q_s = self.session.run([sampled_action, best_action, self.q_func], 
-                              feed_dict={self.obs_t_ph: obs_t})
-
-      # print("a_t eval", a_t)
-      # print("action", action)
-      # print("q_s eval", q_s)
-      # Epsilon Greedy Exploration
-
-      # eps_greedy_dist = np.ones(self.num_actions) * (eps / (A - 1))
-      # eps_greedy_dist[a_t] = 1 - eps
-
-      # Sample from this distribution to get action
-      # action = np.random.multinomial(1, eps_greedy_dist).argmax()
+    if not self.model_initialized or np.random.random() < eps_:
+      action = np.random.randint(0, self.num_actions)
 
     else:
-      action = np.random.randint(0, self.num_actions)
+      q_s = self.session.run(self.q_func, feed_dict={
+        self.obs_t_ph: np.expand_dims(self.replay_buffer.encode_recent_observation(), 0)
+        })
+
+      action = np.argmax(q_s)
+
+
+    # if self.model_initialized:
+    #   eps = self.exploration.value(self.t)
+    #   A = self.num_actions
+
+    #   eps_ = eps * A / (A - 1)
+
+    #   # print("q-vals", self.q_func.shape)
+    #   obs_t = [self.replay_buffer.encode_recent_observation()]
+    #   # print("obs_t", obs_t.shape)
+
+    #   best_action = tf.argmax(self.q_func, 1)
+
+    #   # Credit for tensorflow ops to: https://web.stanford.edu/class/cs20si/2017/lectures/slides_14.pdf
+    #   random_action = tf.random_uniform((), 0, self.num_actions, tf.int64)
+    #   should_explore = tf.random_uniform((), 0, 1) < eps_
+    #   sampled_action = tf.cond(should_explore, lambda: random_action, lambda: best_action)
+
+    #   action = self.session.run([sampled_action], 
+    #                           feed_dict={self.obs_t_ph: obs_t})[0]
+
+    #   # print("a_t eval", a_t)
+    #   # print("action", action)
+    #   # print("q_s eval", q_s)
+    #   # Epsilon Greedy Exploration
+
+    #   # eps_greedy_dist = np.ones(self.num_actions) * (eps / (A - 1))
+    #   # eps_greedy_dist[a_t] = 1 - eps
+
+    #   # Sample from this distribution to get action
+    #   # action = np.random.multinomial(1, eps_greedy_dist).argmax()
+
+    # else:
+    #   action = np.random.randint(0, self.num_actions)
 
     obs, reward, done, info = self.env.step(action)
     self.replay_buffer.store_effect(self.replay_buffer_idx, action, reward, done)
@@ -426,8 +444,8 @@ class QLearner(object):
 def learn(*args, **kwargs):
   alg = QLearner(*args, **kwargs)
   while not alg.stopping_criterion_met():
-    if alg.t % 1000 == 0:
-      print("Timestep %d, Learning starts %d, Learning Freq %d" % (alg.t, alg.learning_starts, alg.learning_freq))
+    # if alg.t % 1000 == 0:
+    #   print("Timestep %d, Learning starts %d, Learning Freq %d" % (alg.t, alg.learning_starts, alg.learning_freq))
     # print("Stepping environment")
     alg.step_env()
     # at this point, the environment should have been advanced one step (and
