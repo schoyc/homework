@@ -11,6 +11,7 @@ import tensorflow.contrib.layers as layers
 from collections import namedtuple
 from dqn_utils import *
 
+LIMIT = 1e5
 OptimizerSpec = namedtuple("OptimizerSpec", ["constructor", "kwargs", "lr_schedule"])
 
 class QLearner(object):
@@ -21,7 +22,7 @@ class QLearner(object):
         q_func,
         optimizer_spec,
         session,
-        exploration=LinearSchedule(1000000, 0.1),
+        exploration=LinearSchedule(100000, 0.1),
         stopping_criterion=None,
         replay_buffer_size=1000000,
         batch_size=32,
@@ -455,4 +456,8 @@ def learn(*args, **kwargs):
         alg.update_model()
         # print("Logging progress")
         alg.log_progress()
+
+        if alg.t > LIMIT:
+            break
+
 
